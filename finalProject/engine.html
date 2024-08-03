@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>WebGL Lighting</title>
+  </head>
+  <body>
+    <canvas width="500" height="500" id="webgl-canvas"></canvas>
+
+    <script src="../common/webgl-debug.js"></script>
+    <script src="../common/math.js"></script>
+    <script src="../common/gl-utils.js"></script>
+    <script src="../common/webgl-lint.js"></script>
+    <script src="../common/input.js"></script>
+    <script src="../common/renderloop.js"></script>
+    <script src="../common/camera.js"></script>
+    <script src="../common/grid.js"></script>
+    <script src="../common/objparser.js"></script>
+    <script src="../common/stats.min.js"></script>
+    <script src="../common/dat.gui.min.js"></script>
+
+    <script src="pointLightRenderer.js"></script>
+    <script src="texRenderer.js"></script>
+    <script src="modeltransform.js"></script>
+    <script src="primitives.js"></script>
+    <script src="howler.js"></script>
+    <button
+      id="startbutton"
+      width="300"
+      height="300"
+      onclick="load()"
+      style="
+        background-color: #111111;
+        border: none;
+        color: white;
+        padding: 50px 50px;
+        text-align: center;
+        text-decoration: none;
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        font-size: 50px;
+      "
+    >
+      Click to begin animation!
+    </button>
+    <script type="text/javascript">
+      "use strict"; // use strict javascript compiling
+
+      //--------------------------------------------------
+      // Global Cashes
+      //--------------------------------------------------
+      var MeshCache = {}; // here all mesh objects are stored, see GLUtils.createMesh() for details on how a mesh is added.
+      var TextureCache = {}; // here all texture objects are stored, see GLUtils.loadTexture() for details on how a texture is added.
+
+      // -----------------------------------------
+      // Global variables
+      // -----------------------------------------
+      var gl;
+      var canvas;
+      var renderLoop;
+
+      var g_pointLightRenderer;
+      var g_texRenderer;
+
+      var g_camera;
+      var g_cameraController;
+
+      var spaceship;
+      var skyboxBack;
+      var skyboxDown;
+      var skyboxFront;
+      var skyboxLeft;
+      var skyboxRight;
+      var skyboxUp;
+      var sun;
+
+      var music;
+      var gui_data = { mute: false, fov: 10 };
+      var gui = new dat.GUI({ width: 100 });
+      gui.add(gui_data, "mute").onChange(function (value) {
+        music?.mute(value);
+      });
+      gui.add(gui_data, "fov", 10, 50).onChange(function (value) {
+        g_cameraController.distance = value;
+      });
+      // lighting
+      var g_lightingData = {
+        pointLightPos: new V3(0, 0, 0),
+        pointLightColor: new V3(1.0, 1.0, 1.0),
+        pointLightStrength: 5.0,
+        ambientColor: new V3(0.2, 0.2, 0.2), //dark gray
+      };
+
+      var g_sunLightingData = {
+        pointLightPos: new V3(0, 0, 0),
+        pointLightColor: new V3(1.0, 1.0, 1.0),
+        pointLightStrength: 1.0,
+        ambientColor: new V3(0.2, 0.2, 0.2), //dark gray
+      };
+
+      function setup() {
+        canvas = document.getElementById("webgl-canvas");
+        gl = GLUtils.createWebGLInstance(canvas, true, true);
+        gl.clearColor(0.1, 0.1, 0.1, 1); // set clear color (RGBA)
+        gl.fitScreen();
+        gl.enable(gl.DEPTH_TEST);
+        gl.depthFunc(gl.LEQUAL);
+
+        // our shader files are loaded here. Once completed, init is called
+        let shaderPaths = [
+          "shaders/pointLightShader.glsl",
+          "shaders/texShader.glsl",
+        ];
+        GLUtils.loadShaders(shaderPaths, init);
+      }
+
+      function init() {
+        Input.initialize(canvas);
+
+        g_pointLightRenderer = new PointLightRenderer("pointLightShader");
+        g_texRenderer = new TexRenderer("texShader");
+
+        g_camera = new PerspectiveCamera(
+          45,
+          0.1,
+          1000,
+          canvas.width / canvas.height
+        );
+        g_cameraController = new OrbiterCameraController(canvas, g_camera);
+        g_cameraController.target.set(0, 0, 0);
+
+        GLUtils.loadTexture("spaceship-texture", "ressources/spaceship2.jpg");
+        let spaceshipMat = {
+          tint: new V3(1, 1, 1),
+          mainTexture: "spaceship-texture",
+        };
+        let spaceshipMesh = OBJLoader.getMesh(
+          "spaceship-texture",
+          "ressources/spaceship.obj"
+        );
+        spaceship = new ModelTransform(spaceshipMesh, spaceshipMat);
+        spaceship.position.set(3, 0, 0);
+        spaceship.scale.set(0.3, 0.3, 0.3);
+
+        GLUtils.loadTexture("space-back", "ressources/space_bk.png");
+        GLUtils.loadTexture("space-down", "ressources/space_dn.png");
+        GLUtils.loadTexture("space-front", "ressources/space_ft.png");
+        GLUtils.loadTexture("space-left", "ressources/space_lf.png");
+        GLUtils.loadTexture("space-right", "ressources/space_rt.png");
+        GLUtils.loadTexture("space-up", "ressources/space_up.png");
+
+        GLUtils.loadTexture("sun", "ressources/sun.jpg");
+
+        let skyboxBackMat = {
+          tint: new V3(1, 1, 1),
+          mainTexture: "space-back",
+        };
+        let skyboxDownMat = {
+          tint: new V3(1, 1, 1),
+          mainTexture: "space-down",
+        };
+        let skyboxFrontMat = {
+          tint: new V3(1, 1, 1),
+          mainTexture: "space-front",
+        };
+        let skyboxLeftMat = {
+          tint: new V3(1, 1, 1),
+          mainTexture: "space-left",
+        };
+        let skyboxRightMat = {
+          tint: new V3(1, 1, 1),
+          mainTexture: "space-right",
+        };
+        let skyboxUpMat = { tint: new V3(1, 1, 1), mainTexture: "space-up" };
+
+        let sunMat = { tint: new V3(1, 1, 1), mainTexture: "sun" };
+
+        skyboxBack = new ModelTransform(
+          Primitives.Quad.getMesh(),
+          skyboxBackMat
+        );
+        skyboxDown = new ModelTransform(
+          Primitives.Quad.getMesh(),
+          skyboxDownMat
+        );
+        skyboxFront = new ModelTransform(
+          Primitives.Quad.getMesh(),
+          skyboxFrontMat
+        );
+
+        skyboxLeft = new ModelTransform(
+          Primitives.Quad.getMesh(),
+          skyboxLeftMat
+        );
+        skyboxRight = new ModelTransform(
+          Primitives.Quad.getMesh(),
+          skyboxRightMat
+        );
+        skyboxUp = new ModelTransform(Primitives.Quad.getMesh(), skyboxUpMat);
+
+        sun = new ModelTransform(Primitives.Sphere.getMesh(), sunMat);
+
+        skyboxBack.scale.set(100, 100, 100);
+
+        skyboxDown.scale.set(100, 100, 100);
+        skyboxDown.rotation.set(-90, 270, 0);
+
+        skyboxFront.scale.set(100, 100, 100);
+        skyboxFront.rotation.set(180, 0, 180);
+
+        skyboxLeft.scale.set(100, 100, 100);
+        skyboxLeft.rotation.set(180, 270, 180);
+
+        skyboxRight.scale.set(100, 100, 100);
+        skyboxRight.rotation.set(180, 90, 180);
+
+        skyboxUp.scale.set(100, 100, 100);
+        skyboxUp.rotation.set(90, 270, 0);
+
+        sun.scale.set(1.5, 2, 1.5);
+
+        renderLoop = new RenderLoop(draw).start();
+
+        music = new Howl({
+          src: ["ressources/2001_theme.mp3"],
+          html5: true, // use streaming audio if possible
+        });
+        music.play();
+        music.mute(gui_data.mute);
+      }
+
+      function checkIntersection(position, sphere1, sphere2) {
+        let distance = position.distanceTo(sphere2.center);
+        return distance < sphere1.radius + sphere2.radius;
+      }
+      function draw(deltaTime) {
+        Input.update();
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+        g_cameraController.update();
+
+        skyboxDown.update();
+        skyboxLeft.update();
+        skyboxRight.update();
+        skyboxUp.update();
+
+        sun.update();
+
+        updatePerson(deltaTime);
+
+        let shaderData = { lightingData: g_lightingData };
+        let sunShaderData = { lightingData: g_sunLightingData };
+
+        let pointLightRenderer = g_pointLightRenderer;
+        let texRenderer = g_texRenderer;
+
+        gl.depthMask(false);
+
+        let skyboxBackPos = g_camera.getPosition().clone().add(0, 0, -50);
+        skyboxBack.position = skyboxBackPos;
+        skyboxBack.update();
+
+        let skyboxDownPos = g_camera.getPosition().clone().add(0, -50, 0);
+        skyboxDown.position = skyboxDownPos;
+        skyboxDown.update();
+
+        let skyboxFrontPos = g_camera.getPosition().clone().add(0, 0, 50);
+        skyboxFront.position = skyboxFrontPos;
+        skyboxFront.update();
+
+        let skyboxLeftPos = g_camera.getPosition().clone().add(-50, 0, 0);
+        skyboxLeft.position = skyboxLeftPos;
+        skyboxLeft.update();
+
+        let skyboxRightPos = g_camera.getPosition().clone().add(50, 0, 0);
+        skyboxRight.position = skyboxRightPos;
+        skyboxRight.update();
+
+        let skyboxUpPos = g_camera.getPosition().clone().add(0, 50, 0);
+        skyboxUp.position = skyboxUpPos;
+        skyboxUp.update();
+
+        texRenderer.drawModel(skyboxBack, g_camera, shaderData);
+        texRenderer.drawModel(skyboxDown, g_camera, shaderData);
+        texRenderer.drawModel(skyboxFront, g_camera, shaderData);
+        texRenderer.drawModel(skyboxLeft, g_camera, shaderData);
+        texRenderer.drawModel(skyboxRight, g_camera, shaderData);
+        texRenderer.drawModel(skyboxUp, g_camera, shaderData);
+
+        gl.depthMask(true);
+
+        texRenderer.drawModel(sun, g_camera, sunShaderData);
+
+        pointLightRenderer.drawModel(spaceship, g_camera, shaderData);
+      }
+
+      function updatePerson(deltaTime) {
+        let spaceshipBoundingSphere = {
+          center: spaceship.position,
+          radius: 1.0, // Adjust the radius based on the size of your spaceship model
+        };
+
+        let sunBoundingSphere = {
+          center: sun.position,
+          radius: 1.5, // Adjust the radius based on the size of your sun model
+        };
+
+        let speed = 10;
+        let movement = 0.5;
+        let rotationY = 0;
+        let rotationZ = 0;
+        let rotationX = 0;
+        if (Input.keyHold("arrowdown")) {
+          rotationX = 1;
+        }
+        if (Input.keyHold("arrowup")) {
+          rotationX = -1;
+        }
+        if (Input.keyHold("space")) {
+          movement = 2;
+        }
+        if (Input.keyHold("x")) {
+          rotationZ = 1;
+        }
+        if (Input.keyHold("z")) {
+          rotationZ = -1;
+        }
+        if (Input.keyHold("arrowleft")) {
+          rotationY = 1;
+        }
+        if (Input.keyHold("arrowright")) {
+          rotationY = -1;
+        }
+        let movementVector = spaceship.localForward;
+        movementVector.multiplyScalar(deltaTime * speed * movement);
+
+        // Update spaceship position
+        let newPosition = spaceship.position.clone().addV(movementVector);
+
+        // Check for intersection with sun
+        if (
+          !checkIntersection(
+            newPosition,
+            spaceshipBoundingSphere,
+            sunBoundingSphere
+          )
+        ) {
+          spaceship.position.addV(movementVector);
+        }
+
+        spaceship.rotation.y += deltaTime * 270 * rotationY; // scale according to frameRate
+        spaceship.rotation.z += deltaTime * 270 * rotationZ; // scale according to frameRate
+        spaceship.rotation.x += deltaTime * 270 * rotationX; // scale according to frameRate
+
+        spaceship.update();
+      }
+
+      function load() {
+        var button = document.getElementById("startbutton");
+        button.remove();
+        setup();
+      }
+    </script>
+  </body>
+</html>
